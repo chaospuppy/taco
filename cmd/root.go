@@ -1,17 +1,14 @@
 package cmd
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rodneyxr/taco/internal/taco"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const defaultTemplate = `{{ team "default" }} {{ .Message }} {{ .Emoji }}`
@@ -59,20 +56,23 @@ func NewRootCommand(info BuildInfo) *cobra.Command {
 	cmd.SetVersionTemplate("{{.Version}}\n")
 
 	flags := cmd.Flags()
-	flags.StringVarP(&opts.configPath, "config", "c", "taco.yaml", "config file (searches current directory, then home)")
+	pFlags := cmd.PersistentFlags()
+	pFlags.StringVarP(&opts.configPath, "config", "c", "taco.yaml", "config file (searches current directory, then home)")
 	flags.IntVarP(&opts.count, "number-of-tacos", "n", 5, "number of teammates to include")
 	flags.StringVarP(&opts.message, "message", "m", "", "message to include")
 	flags.StringVar(&opts.emoji, "emoji", "🌮", "emoji to include")
 	flags.StringVar(&opts.template, "template", defaultTemplate, "message template")
 	flags.StringVarP(&opts.team, "team", "t", "default", "team to use with the default template")
-	flags.StringVar(&opts.statePath, "state", "", "rotation state file")
+	pFlags.StringVar(&opts.statePath, "state", "", "rotation state file")
 	flags.BoolVar(&opts.noRotate, "no-rotate", false, "preview without advancing rotation")
+
+	cmd.AddCommand(NewServerCommand())
 
 	return cmd
 }
 
 func run(cmd *cobra.Command, opts options) error {
-	cfg, err := loadConfig(opts.configPath, cmd.Flags().Changed("config"))
+	cfg, err := taco.LoadConfig(opts.configPath, cmd.Flags().Changed("config"))
 	if err != nil {
 		return err
 	}
@@ -164,67 +164,4 @@ func formatVersion(info BuildInfo) string {
 		info.Date = "unknown"
 	}
 	return fmt.Sprintf("taco %s (commit %s, built %s)", info.Version, info.Commit, info.Date)
-}
-
-func loadConfig(path string, explicit bool) (taco.Config, error) {
-	cfg := taco.Config{}
-
-	configPath, err := resolveConfigPath(path, explicit)
-	if err != nil {
-		return cfg, err
-	}
-	if configPath == "" {
-		return cfg, nil
-	}
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return cfg, fmt.Errorf("read config: %w", err)
-	}
-
-	v := viper.New()
-	v.SetConfigType("yaml")
-
-	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
-		return cfg, fmt.Errorf("read config: %w", err)
-	}
-
-	if err := v.Unmarshal(&cfg); err != nil {
-		return cfg, fmt.Errorf("parse config: %w", err)
-	}
-	return cfg, nil
-}
-
-func resolveConfigPath(path string, explicit bool) (string, error) {
-	if path == "" {
-		path = "taco.yaml"
-	}
-
-	if filepath.IsAbs(path) || strings.Contains(path, string(os.PathSeparator)) {
-		if _, err := os.Stat(path); err != nil {
-			if errors.Is(err, os.ErrNotExist) && !explicit {
-				return "", nil
-			}
-			return "", fmt.Errorf("read config: %w", err)
-		}
-		return path, nil
-	}
-
-	candidates := []string{path}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, "."+path), filepath.Join(home, path))
-	}
-
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("read config: %w", err)
-		}
-	}
-
-	if explicit {
-		return "", fmt.Errorf("read config: %s was not found", path)
-	}
-	return "", nil
 }
